@@ -103,3 +103,24 @@ test("the site says when the market next opens, skipping the holiday", () => {
   assert.equal(ms.open, true);
   assert.equal(ms.closesAt, "1 pm ET", "the early close");
 });
+
+test("a 24/7 order with stale pool price falls back to exchange pricing", () => {
+  // Kill: drop the stale check or fallback in instantQuote for 24/7 stocks.
+  const staleTime = SUN_S - 2 * 3601; // Over 2 hours ago
+  const lastStale = [185, staleTime, 174.62, "b", 174.62, 99] as Quote;
+  // Pool unavailable, last price stale, exchange has close price
+  const q = instantQuote(true, "ARM", null, closed(174.62), lastStale, SUN, false);
+  assert.notEqual(q, null);
+  assert.equal(q?.venue, "x");
+  assert.equal(q?.how, "close");
+  assert.equal(q?.price, 174.62);
+});
+
+test("a 24/7 order whose pool fails checks falls back to exchange during market hours", () => {
+  // Kill: don't fall back when pool fails for 24/7 stocks.
+  const q = instantQuote(true, "SAP", chain("SAP", 230, MIN_POOL_USD - 1), inSession(227.35), lastB(227, 227), TUE_11, true);
+  assert.notEqual(q, null);
+  assert.equal(q?.venue, "x");
+  assert.equal(q?.how, "exchange");
+  assert.equal(q?.price, 227.35);
+});

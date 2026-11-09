@@ -35,10 +35,11 @@ test("a market-hours stock never takes a Base price, even if one is offered", ()
   assert.equal(hit, null);
 });
 
-test("a thin pool's price is held back and the stock keeps its last quote", () => {
+test("a thin pool's price is held back, but if not stale yet, keeps last quote", () => {
   // Kill: drop the MIN_POOL_USD check.
-  const last = { NVDA: [186.64, FRI_CLOSE, 185, "x"] as any };
-  // A sensible price, so only the pool size can stop it.
+  const recentTime = NOW_S - 1800; // 30 minutes ago, definitely not stale
+  const last = { NVDA: [186.64, recentTime, 185, "b", 186.64, 99] as any };
+  // A sensible price, so only the pool size can stop it. Last quote is recent (30 min ago).
   const { data, held } = buildTick({ NVDA: x(186.64) }, chain({ NVDA: [187, MIN_POOL_USD - 1] }), last, NOW);
   assert.deepEqual(data.NVDA, last.NVDA);
   assert.deepEqual(held, ["NVDA"]);
@@ -46,7 +47,8 @@ test("a thin pool's price is held back and the stock keeps its last quote", () =
 
 test("a Base price far from the stock's exchange price is held back", () => {
   // Kill: drop the MAX_GAP check.
-  const last = { NVDA: [186.64, FRI_CLOSE, 185, "x"] as any };
+  const recentTime = NOW_S - 1800;
+  const last = { NVDA: [186.64, recentTime, 185, "b", 186.64, 98] as any };
   const { data, held } = buildTick({ NVDA: x(186.64) }, chain({ NVDA: 186.64 * 1.2 }), last, NOW);
   assert.deepEqual(data.NVDA, last.NVDA);
   assert.deepEqual(held, ["NVDA"]);
@@ -85,4 +87,25 @@ test("Multicall3 answers decode into each call's success and bytes", () => {
     + w(1) + w(0x40) + w(2) + "abcd".padEnd(64, "0")
     + w(0) + w(0x40) + w(0);
   assert.deepEqual(decodeAggregate3(hex), [{ ok: true, data: "abcd" }, { ok: false, data: "" }]);
+});
+
+test("a 24/7 stock with stale pool price falls back to exchange pricing", () => {
+  // Kill: drop the stale check or the fallback to exchange pricing.
+  const staleTime = NOW_S - 2 * 3601; // Just over 2 hours ago
+  const last = { ARM: [185, staleTime, 174.62, "b", 174.62, 99] as any };
+  const { data } = buildTick({ ARM: x(174.62) }, null, last, NOW);
+  // Should fall back to exchange price (venue "x"), not keep the stale "b" price
+  assert.equal(data.ARM[3], "x");
+  assert.equal(data.ARM[0], 174.62);
+  assert.equal(data.ARM[1], FRI_CLOSE);
+});
+
+test("a thin pool with stale last price falls back to exchange", () => {
+  // Kill: don't apply fallback when pool fails checks if last price is stale.
+  const staleTime = NOW_S - 2 * 3601;
+  const last = { NVO: [40.5, staleTime, 40, "b", 40, 99] as any };
+  const { data } = buildTick({ NVO: x(40.66) }, chain({ NVO: [41, MIN_POOL_USD - 1] }), last, NOW);
+  // Pool failed, last is stale, should fall back to exchange
+  assert.equal(data.NVO[3], "x");
+  assert.equal(data.NVO[0], 40.66);
 });

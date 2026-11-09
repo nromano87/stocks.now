@@ -112,16 +112,20 @@ Cancel a pending order:
 
 Orders fill the moment they arrive, at the live price read right then:
 
-- ${H24.length} stocks trade 24/7 at their token's own price in its pool on Base,
-  read at one block, any hour: ${H24.join(", ")}.
+- ${H24.length} stocks are designated for 24/7 trading at their token's price in its pool
+  on Base, read at one block, any hour: ${H24.join(", ")}.
+  If a pool fails its checks (less than $25k liquidity, or price more than 15% off
+  the stock's exchange price) or the pool price becomes stale (older than 2 hours),
+  the stock falls back to exchange pricing: the live price during US market hours
+  (9:30 to 16:00 New York time, weekdays), the last close otherwise.
 - The other ${STOCKS.length - H24.length} trade at the stock's US exchange price: the live price while
-  the US market is open (9:30 to 16:00 New York time, weekdays), and the last
-  close while it is shut.
+  the US market is open, and the last close while it is shut.
 
-If no fair price can be read right then (Base doesn't answer, or a pool fails its
-checks), the order waits and fills at the first price recorded after it (every
-5 minutes). The answer says which happened ("status": "filled" or "pending").
-GET /api/stocks says which stock trades how ("trades"). Every fill's receipt
+If no fair price can be read right then (Base doesn't answer, a pool fails checks
+and exchange pricing isn't available yet), the order waits and fills at the first
+price recorded after it (every 5 minutes). The answer says which happened
+("status": "filled" or "pending"). GET /api/stocks says which stock trades how
+("trades") and shows if a 24/7 stock's price is stale. Every fill's receipt
 (GET /api/orders/ORDER_ID) says where its price came from: the Base block and
 pool, or the exchange.
 

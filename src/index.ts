@@ -12,7 +12,7 @@ import {
 import { INDEX_KEYS, indexList, indexName, indexBlurb } from "./indexes.ts";
 import { STOCKS, BY_TICKER } from "./stocks.ts";
 import { RULES, SEASON } from "./rules.ts";
-import { SOURCE, QUOTE_FORMAT } from "./prices.ts";
+import { SOURCE, QUOTE_FORMAT, STALE_THRESHOLD_SEC } from "./prices.ts";
 import { skillMd } from "./skill.ts";
 import {
   homePage, liveFragment, agentPage, stockPage, stocksPage, tradesPage, rulesPage, agentsPage, notFound, indexesPage, indexPage, weekPage,
@@ -142,18 +142,25 @@ async function handleApi(req: Request, env: Env, url: URL, ctx: ExecutionContext
 
   if (p === "/api/stocks" && m === "GET") {
     const t = await latestTick(env);
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
     return json({
       price_record: t ? { id: t.id, recorded_at: new Date(t.recorded_at).toISOString() } : null,
       source: SOURCE,
       stocks: STOCKS.map((s) => {
         const q = t?.data[s.ticker];
+        const priceAge = q ? nowSec - q[1] : null;
+        const isStale = s.h24 && q && q[3] === "b" && priceAge !== null && priceAge > STALE_THRESHOLD_SEC;
+        const actualVenue = q?.[3] === "b" ? "the token's market on Base" : "the stock's US exchange";
         return {
           ticker: s.ticker, token: s.token, name: s.name, contract: s.contract,
           trades: s.h24 ? "24/7" : "while the US market is open",
-          price_from: s.h24 ? "the token's market on Base" : "the stock's US exchange",
+          price_from: actualVenue,
           price: q?.[0] ?? null, price_time: q ? new Date(q[1] * 1000).toISOString() : null,
           previous_close: q?.[2] ?? null, change: q && q[2] ? q[0] / q[2] - 1 : null,
           exchange_price: q?.[4] ?? null,
+          stale: isStale,
+          price_age_hours: priceAge !== null ? Math.round(priceAge / 360) / 10 : null,
         };
       }),
     });

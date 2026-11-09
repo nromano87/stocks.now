@@ -23,6 +23,8 @@ const UA = "Mozilla/5.0 (compatible; stocks-now-league/1.0; +https://stocks.now)
 export const MIN_POOL_USD = 25_000;
 /** A Base price more than this far from the stock's last exchange price is held back. */
 export const MAX_GAP = 0.15;
+/** A 24/7 stock's pool price older than this (in seconds) is considered stale and falls back to exchange pricing. */
+export const STALE_THRESHOLD_SEC = 2 * 3600; // 2 hours
 
 export interface ExchangeQuote { price: number; t: number; prev: number | null; sessionStart: number | null; sessionEnd: number | null }
 
@@ -72,6 +74,9 @@ function lastClose(x: ExchangeQuote, nowSec: number): number | null {
  * Build one price record from what was read. Pure: no network, so it can be tested.
  * A stock that got no usable price this time keeps its last quote, with its old
  * price time, so orders on it keep waiting instead of filling at a stale price.
+ * 
+ * NEW: 24/7 stocks with stale pool prices (older than STALE_THRESHOLD_SEC) fall back
+ * to exchange pricing: the live price during market hours, the last close otherwise.
  */
 export function buildTick(
   exchange: Record<string, ExchangeQuote>,
@@ -91,9 +96,20 @@ export function buildTick(
       // Compare against the exchange: live while the market is open, else its last close.
       const ref = x?.price ?? (prevQ?.[4] ?? null);
       const close = x ? lastClose(x, nowSec) : (prevQ?.[2] ?? null);
+      const prevPoolStale = prevQ && prevQ[3] === "b" && (nowSec - prevQ[1]) > STALE_THRESHOLD_SEC;
+      
       if (b && base && b.poolUsd >= MIN_POOL_USD && ref && Math.abs(b.price / ref - 1) <= MAX_GAP) {
+        // Fresh pool price passes checks
         q = [round6(b.price), base.time, close, "b", ref, base.block];
-      } else if (b) held.push(s.ticker);
+      } else if (b && !prevPoolStale) {
+        // Pool failed checks, but last price not stale yet - hold it (keep waiting)
+        held.push(s.ticker);
+      }
+      
+      // Fallback: if last price is stale (or pool failed and we have no recent quote), use exchange pricing
+      if (!q && prevPoolStale && x) {
+        q = [x.price, x.t, x.prev, "x"];
+      }
     } else if (x) {
       q = [x.price, x.t, x.prev, "x"];
     }
@@ -130,7 +146,8 @@ export interface LiveQuote {
  * Instant fills. Pure, so it can be tested. An order fills when it arrives, at:
  * - a 24/7 stock: its token's price in its pool on Base, read just now, if the pool
  *   passes the same checks as a price record (MIN_POOL_USD, within MAX_GAP of the
- *   stock's exchange price);
+ *   stock's exchange price); if the pool fails checks or the last recorded price is
+ *   stale (older than STALE_THRESHOLD_SEC), falls back to exchange pricing.
  * - a market-hours stock: its exchange price read just now, which is the live price
  *   in session and the last close after it; if the exchange didn't answer, the last
  *   recorded price, but only while the market is shut (then it is the close).
@@ -145,13 +162,29 @@ export function instantQuote(
   nowMs: number,
   marketOpen: boolean,
 ): LiveQuote | null {
+  const nowSec = Math.floor(nowMs / 1000);
+  
   if (h24) {
     const b = base?.pools[ticker];
     const ref = x?.price ?? last?.[4] ?? null;
-    if (!base || !b || !(b.price > 0) || b.poolUsd < MIN_POOL_USD || !ref || Math.abs(b.price / ref - 1) > MAX_GAP) return null;
-    return { price: round6(b.price), time: base.time, venue: "b", block: base.block, how: "pool" };
+    const lastPoolStale = last && last[3] === "b" && (nowSec - last[1]) > STALE_THRESHOLD_SEC;
+    
+    // Try pool price first
+    if (base && b && b.price > 0 && b.poolUsd >= MIN_POOL_USD && ref && Math.abs(b.price / ref - 1) <= MAX_GAP) {
+      return { price: round6(b.price), time: base.time, venue: "b", block: base.block, how: "pool" };
+    }
+    
+    // Fallback to exchange pricing if pool failed or last price is stale
+    if ((b || lastPoolStale) && x && x.price > 0) {
+      const live = x.sessionStart !== null && x.sessionEnd !== null && nowSec >= x.sessionStart && nowSec < x.sessionEnd;
+      return { price: x.price, time: x.t, venue: "x", block: null, how: live ? "exchange" : "close" };
+    }
+    
+    // No fallback available, wait
+    return null;
   }
-  const nowSec = Math.floor(nowMs / 1000);
+  
+  // Market-hours stocks
   if (x && x.price > 0) {
     const live = x.sessionStart !== null && x.sessionEnd !== null && nowSec >= x.sessionStart && nowSec < x.sessionEnd;
     return { price: x.price, time: x.t, venue: "x", block: null, how: live ? "exchange" : "close" };
