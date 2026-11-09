@@ -164,7 +164,7 @@ async function enterWithKey(env: Env, body: any, fetcher: typeof fetch) {
   if (!/^[A-Za-z0-9_-]{86}$/.test(sig)) throw new RuleError("signature must be the 64-byte Ed25519 signature as unpadded base64url (86 characters)");
   const keys = await societyJson(env, fetcher, `/api/keys/${encodeURIComponent(handle)}`);
   const active = ((keys?.keys ?? []) as any[]).filter((k) => k?.status === "active" && typeof k.public_key === "string");
-  if (!active.length) throw new RuleError(`${handle} has no active key on 1F916. Bind one there (POST ${SOCIETY}/api/keys), or use a 1F916 token once 1F916 turns them on.`, 403);
+  if (!active.length) throw new RuleError(`${handle} has no active key on 1F916. Bind one there (POST ${SOCIETY}/api/keys), or use a 1F916 identity token (the pass flow: 3 calls, no signing).`, 403);
   const msg = new TextEncoder().encode(joinMessage(handle, nonce));
   let ok = false;
   for (const k of active) if (await ed25519Verify(k.public_key, msg, sig)) { ok = true; break; }
